@@ -1,8 +1,61 @@
 import matplotlib.pyplot as plt
 import networkx as nx
 import json
+import re
+import ast
 
-def build_graph_and_draw_warehouse(config_file):
+
+def parse_x_varname(s):
+    pattern = r"x\[\s*(\(.*?\))\s*,\s*(\(.*?\))\s*,\s*([^,\]]+)\s*\]"
+
+    match = re.match(pattern, s)
+    if match:
+        # Extract the parts as strings
+        tuple1_str = match.group(1)
+        tuple2_str = match.group(2)
+        third_str = match.group(3).strip()
+        
+        # Convert the tuple strings to actual tuple objects
+        tuple1 = ast.literal_eval(tuple1_str)
+        tuple2 = ast.literal_eval(tuple2_str)
+        
+        # Since the last element is not quoted, we convert it to a string.
+        # If it were quoted (e.g. "'l_9'"), ast.literal_eval would handle it.
+        if not ((third_str.startswith("'") and third_str.endswith("'")) or 
+                (third_str.startswith('"') and third_str.endswith('"'))):
+            third = third_str
+        else:
+            third = ast.literal_eval(third_str)
+        
+        return tuple1, tuple2, third
+    else:
+        raise ValueError(f"Invalid x variable name: {s}")
+    
+def parse_u_varname(s):
+    pattern = r"v\[\s*(\(.*?\))\s*,\s*([^,\]]+)\s*\]"
+
+    match = re.match(pattern, s)
+    if match:
+        # Extract the parts as strings
+        tuple1_str = match.group(1)
+        second_str = match.group(2).strip()
+        
+        # Convert the tuple strings to actual tuple objects
+        tuple1 = ast.literal_eval(tuple1_str)
+        
+        # Since the last element is not quoted, we convert it to a string.
+        # If it were quoted (e.g. "'l_9'"), ast.literal_eval would handle it.
+        if not ((second_str.startswith("'") and second_str.endswith("'")) or 
+                (second_str.startswith('"') and second_str.endswith('"'))):
+            second = second_str
+        else:
+            second = ast.literal_eval(second_str)
+        
+        return tuple1, second
+    else:
+        raise ValueError(f"Invalid u variable name: {s}")
+
+def build_graph_and_draw_warehouse(config_file, solution_file=None, num_route_to_display=None):
     """
     Draws a 2D representation of a parallel-aisle warehouse with locations on both sides of each aisle
     and a graph representation of the aisles.
@@ -15,10 +68,13 @@ def build_graph_and_draw_warehouse(config_file):
         config = json.load(f)
 
     num_aisles = config['num_aisles']
-    locations_per_aisle = config['locations_per_aisle']
-    aisle_draw_size = config['aisle_draw_size']
-    location_draw_size = config['location_draw_size']
+    locations_per_aisle = config['locations_per_aisle'] if 'locations_per_aisle' in config else config['num_cells']
+    aisle_draw_size = config['aisle_draw_size'] if 'aisle_draw_size' in config else 2
+    location_draw_size = config['location_draw_size'] if 'location_draw_size' in config else 1
     storage_data = config['storage']
+
+    if isinstance(storage_data, dict):
+        storage_data = list(storage_data.values())
 
     # Create a plot
     fig, ax = plt.subplots(figsize=(15, locations_per_aisle * location_draw_size / 2))
@@ -30,9 +86,17 @@ def build_graph_and_draw_warehouse(config_file):
     storage_map = {}
     for item in storage_data:
         color = item['color']
-        for loc in item['storage']:
-            key = (loc['aisle'], loc['loc'], loc['side'])
-            storage_map[key] = {'color': color, 'quantity': loc['quantity']}
+        if isinstance(item['storage'], dict):
+            locs = item['storage']['loc']
+            for i in range(len(locs)):
+                loc = locs[i]
+                qty = item['storage']['quantity'][i]
+                key = (loc[0]-1, loc[1]-1, loc[2])
+                storage_map[key] = {'color': color, 'quantity': qty}
+        else:
+            for loc in item['storage']:
+                key = (loc['aisle'], loc['loc'], loc['side'])
+                storage_map[key] = {'color': color, 'quantity': loc['quantity']}
 
     # Draw warehouse layout and add nodes/edges to the graph
     for aisle in range(num_aisles):
@@ -98,14 +162,87 @@ def build_graph_and_draw_warehouse(config_file):
 
     # Draw the graph
     pos = nx.get_node_attributes(G, 'pos')
-    nx.draw(G, pos, node_size=50, node_color='black', ax=ax)
+
+    
+    if solution_file is not None:
+        with open(solution_file, 'r') as f:
+            sol = json.load(f)
+
+        u_vars = [v for v in sol['Vars'] if v['VarName'][0:1] == 'v']
+
+        
+        u_by_k = {}
+        for u in u_vars:
+            i, k = parse_u_varname(u['VarName'])
+            val = int(u['X'])
+            if k not in u_by_k:
+                u_by_k[k] = []
+            u_by_k[k].append((i, val))
+
+        route_colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'p', 'o', 'w']
+
+        labels = {}
+        num_routes = 0
+        for k in u_by_k:
+            u_by_k[k] = sorted(u_by_k[k], key=lambda x: x[1])
+            if len(u_by_k[k]) <= 1:
+                continue
+
+            num_k = int(k.replace('l_', ''))
+
+            if num_route_to_display is not None and num_route_to_display != num_k:
+                continue
+
+            color = route_colors[num_k % len(route_colors)]
+
+            prev = (1, 0)
+            cnt = 1
+            for i in range(1, len(u_by_k[k])):
+                curr = u_by_k[k][i][0]
+                np = (prev[0]-1, prev[1])
+                nc = (curr[0]-1, curr[1])
+
+                if nc in labels:
+                    labels[nc] += ", " + str(cnt)
+                else:
+                    labels[nc] = str(cnt)
+                
+                cnt += 1
+
+                if np not in G.nodes:
+                    wrong_cnt += 1
+                    print("Invalid node prev:", np)
+
+                if nc not in G.nodes:
+                    wrong_cnt += 1
+                    print("Invalid node cur:", nc)
+
+                # path = nx.shortest_path(G, source=np, target=nc)
+                # path_edges = list(zip(path, path[1:]))
+                G.add_edge(np, nc, color=color)
+                prev = curr
+
+            G.add_edge((prev[0]-1, prev[1]), (0,0), color=color)
+
+
+    edges = G.edges()
+    overlay_edges = [(u, v) for u, v in edges if 'color' in G[u][v]]
+    normal_edges = [(u, v) for u, v in edges if 'color' not in G[u][v]]
+    
+    colors = [G[u][v]['color'] if 'color' in G[u][v] else 'black' for u,v in overlay_edges]
+
+    nx.draw(G, pos, node_size=50, node_color='black', ax=ax, edgelist=normal_edges, edge_color='black')
+    nx.draw_networkx_edges(G, pos, edgelist=overlay_edges, edge_color=colors, width=2)
+
+    pos_labels = { k: (v[0] + 0.3, v[1] + 0.3) for k, v in pos.items() }
+
+    nx.draw_networkx_labels(G,pos_labels,labels,font_color='black')
 
     # Add grid and labels
     ax.set_aspect('equal')
     ax.axis('off')
 
     return G,(fig, ax)
-
 
 if __name__ == '__main__':
     G, _ = build_graph_and_draw_warehouse("config.json")

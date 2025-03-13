@@ -1,23 +1,22 @@
 import networkx
 import json
+import sys
 import matplotlib.pyplot as plt
 from draw import build_graph_and_draw_warehouse
 
-config_file = 'config.json'
+if len(sys.argv) > 4 or len(sys.argv) < 2:
+    print("Usage: python main.py config_file [solution_file] [num_route_to_display]")
+    sys.exit(1)
 
-G, _ = build_graph_and_draw_warehouse(config_file)
+config_file = sys.argv[1]
+solution_file = None
+num_route_to_display = None
+if len(sys.argv) > 2:
+    solution_file = sys.argv[2]
+    if len(sys.argv) > 3:
+        num_route_to_display = int(sys.argv[3])
 
 
-with open(config_file, 'r') as f:
-    config = json.load(f)
-
-num_aisles = config['num_aisles']
-num_locations_per_aisle = config['locations_per_aisle']
-
-S = { s['item'] for s in config['storage'] }
-K = [i for i in range(len(config['pick_lists']))]
-# S_k = [ x['item'] for x in config['pick_lists'][k] ]
-
-N = [ (i,j,l) for i in range(num_aisles) for j in range(1, num_locations_per_aisle + 1) for l in ['left', 'right'] ]
+G,_ = build_graph_and_draw_warehouse(config_file, solution_file, num_route_to_display)
 
 plt.show()
